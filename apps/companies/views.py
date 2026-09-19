@@ -7,15 +7,31 @@ from rest_framework import viewsets, permissions, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Company, Branch, Department, JobGrade, CompanySettings
-from apps.accounts.permissions import IsHRManager
+from apps.accounts.permissions import IsHRManager, IsCompanyAdmin
 
 
 # ── Serializers ────────────────────────────────────────────────────────────────
 
 class CompanySettingsSerializer(serializers.ModelSerializer):
+    # Never send credentials back to the browser after they are saved.
+    paystack_secret_key = serializers.CharField(
+        write_only=True, required=False, allow_blank=True
+    )
+    paystack_secret_key_configured = serializers.SerializerMethodField()
+
     class Meta:
         model = CompanySettings
         exclude = ['company']
+        read_only_fields = ['paystack_secret_key_configured']
+
+    def get_paystack_secret_key_configured(self, obj):
+        return bool(obj.paystack_secret_key)
+
+    def update(self, instance, validated_data):
+        # An empty password field means “keep the existing secret”, not clear it.
+        if not validated_data.get('paystack_secret_key'):
+            validated_data.pop('paystack_secret_key', None)
+        return super().update(instance, validated_data)
 
 
 class CompanySerializer(serializers.ModelSerializer):
@@ -65,6 +81,12 @@ class JobGradeSerializer(serializers.ModelSerializer):
 class CompanyViewSet(viewsets.ModelViewSet):
     serializer_class = CompanySerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_permissions(self):
+        # Only company/super admins may change payment credentials or settings.
+        if self.action == 'company_settings' and self.request.method != 'GET':
+            return [permissions.IsAuthenticated(), IsCompanyAdmin()]
+        return super().get_permissions()
 
     def get_queryset(self):
         from apps.accounts.models import User

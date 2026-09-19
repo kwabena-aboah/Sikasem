@@ -104,7 +104,7 @@ class Employee(models.Model):
     mobile_money_number = models.CharField(max_length=20, blank=True)
     mobile_money_provider = models.CharField(
         max_length=20,
-        choices=[('mtn', 'MTN Mobile Money'), ('vodafone', 'Vodafone Cash'), ('airteltigo', 'AirtelTigo Money')],
+        choices=[('mtn', 'MTN Mobile Money'), ('vodafone', 'Telecel Cash'), ('airteltigo', 'AirtelTigo Money')],
         blank=True
     )
     payment_method = models.CharField(

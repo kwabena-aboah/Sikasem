@@ -54,8 +54,16 @@ def disburse_payroll_task(period_id: str, initiated_by_id: str):
     from .models import PayrollPeriod, Payslip, PaymentBatch, PaymentRecord
 
     period = PayrollPeriod.objects.get(id=period_id)
-    if not settings.PAYSTACK_SECRET_KEY:
-        raise RuntimeError('PAYSTACK_SECRET_KEY is not configured.')
+    company_settings = getattr(period.company, 'settings', None)
+    secret_key = (
+        getattr(company_settings, 'paystack_secret_key', '')
+        or getattr(settings, 'PAYSTACK_SECRET_KEY', '')
+    )
+    if not secret_key:
+        raise RuntimeError(
+            'Paystack is not configured. An administrator must add the Paystack secret key '
+            'in System Settings > Payment Settings before salary payments can be made.'
+        )
 
     existing = PaymentBatch.objects.filter(
         payroll_period=period, status__in=['processing', 'completed']
@@ -70,10 +78,13 @@ def disburse_payroll_task(period_id: str, initiated_by_id: str):
         raise RuntimeError('No approved payslips are available for disbursement.')
 
     headers = {
-        'Authorization': f'Bearer {settings.PAYSTACK_SECRET_KEY}',
+        'Authorization': f'Bearer {secret_key}',
         'Content-Type': 'application/json',
     }
-    base_url = getattr(settings, 'PAYSTACK_BASE_URL', 'https://api.paystack.co').rstrip('/')
+    base_url = getattr(
+        company_settings, 'paystack_base_url', ''
+    ) or getattr(settings, 'PAYSTACK_BASE_URL', 'https://api.paystack.co')
+    base_url = base_url.rstrip('/')
 
     def paystack_post(path, payload):
         response = requests.post(f'{base_url}{path}', json=payload, headers=headers, timeout=30)
@@ -102,23 +113,40 @@ def disburse_payroll_task(period_id: str, initiated_by_id: str):
             amount=payslip.net_pay,
             payment_method=employee.payment_method,
             account_number=employee.account_number or employee.mobile_money_number,
+            mobile_number=employee.mobile_money_number,
             bank_name=employee.bank_name,
             transfer_reference=reference,
         )
 
         try:
-            if employee.payment_method != 'bank':
-                raise RuntimeError('Only bank transfers are supported by the bulk bank-transfer integration.')
-            if not employee.account_number or not employee.bank_code:
-                raise RuntimeError('Bank account number and Paystack bank code are required.')
+            if employee.payment_method == 'bank':
+                recipient_type = 'ghipss'
+                account_number = employee.account_number
+                bank_code = employee.bank_code
+                if not account_number or not bank_code:
+                    raise RuntimeError('Bank account number and Paystack bank code are required.')
+            elif employee.payment_method == 'mobile_money':
+                recipient_type = 'mobile_money'
+                account_number = employee.mobile_money_number
+                bank_code = {
+                    'mtn': 'mtn',
+                    'vodafone': 'vod',
+                    'airteltigo': 'tgo',
+                }.get(employee.mobile_money_provider, '')
+                if not account_number or not bank_code:
+                    raise RuntimeError(
+                        'Mobile money number and a supported provider (MTN, Telecel, or AirtelTigo) are required.'
+                    )
+            else:
+                raise RuntimeError('Employee payment method must be Bank Transfer or Mobile Money.')
 
             recipient_code = employee.paystack_recipient_code
             if not recipient_code:
                 recipient = paystack_post('/transferrecipient', {
-                    'type': 'ghipss',
+                    'type': recipient_type,
                     'name': employee.account_name or employee.get_full_name(),
-                    'account_number': employee.account_number,
-                    'bank_code': employee.bank_code,
+                    'account_number': account_number,
+                    'bank_code': bank_code,
                     'currency': 'GHS',
                 })
                 recipient_code = recipient.get('recipient_code')

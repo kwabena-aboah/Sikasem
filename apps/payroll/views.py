@@ -357,13 +357,6 @@ class CustomPayrollRuleViewSet(viewsets.ModelViewSet):
 @permission_classes([AllowAny])
 def paystack_webhook(request):
     """Reconcile Paystack transfer status notifications safely."""
-    signature = request.headers.get('x-paystack-signature', '')
-    expected = hmac.new(
-        settings.PAYSTACK_SECRET_KEY.encode(), request.body, hashlib.sha512
-    ).hexdigest()
-    if not settings.PAYSTACK_SECRET_KEY or not hmac.compare_digest(signature, expected):
-        return Response({'error': 'Invalid signature'}, status=status.HTTP_401_UNAUTHORIZED)
-
     try:
         payload = json.loads(request.body or '{}')
     except json.JSONDecodeError:
@@ -376,9 +369,23 @@ def paystack_webhook(request):
         return Response({'received': True})
 
     from .models import PaymentRecord
-    record = PaymentRecord.objects.filter(transfer_reference=reference).select_related('batch__payroll_period').first()
+    record = PaymentRecord.objects.filter(
+        transfer_reference=reference
+    ).select_related('batch__payroll_period__company__settings').first()
     if not record:
         return Response({'received': True})
+
+    company_settings = getattr(record.batch.payroll_period.company, 'settings', None)
+    configured_key = (
+        getattr(company_settings, 'paystack_secret_key', '')
+        or getattr(settings, 'PAYSTACK_SECRET_KEY', '')
+    )
+    signature = request.headers.get('x-paystack-signature', '')
+    expected = hmac.new(
+        configured_key.encode(), request.body, hashlib.sha512
+    ).hexdigest()
+    if not configured_key or not hmac.compare_digest(signature, expected):
+        return Response({'error': 'Invalid signature'}, status=status.HTTP_401_UNAUTHORIZED)
 
     status_map = {
         'transfer.success': PaymentRecord.Status.SUCCESS,

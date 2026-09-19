@@ -153,6 +153,11 @@ class CompanySettings(models.Model):
     # Payment
     payment_provider = models.CharField(max_length=30, default='paystack')
     auto_disburse = models.BooleanField(default=False)
+    # Stored per company so payroll payments do not depend on one global key.
+    # The secret is write-only in the API and is never returned to the frontend.
+    paystack_secret_key = models.CharField(max_length=255, blank=True)
+    paystack_public_key = models.CharField(max_length=255, blank=True)
+    paystack_base_url = models.URLField(default='https://api.paystack.co')
     
     class Meta:
         db_table = 'company_settings'

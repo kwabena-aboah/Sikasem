@@ -433,7 +433,7 @@
                     <label class="sk-label">Mobile Money Provider</label>
                     <select class="sk-select" v-model="form.mobile_money_provider">
                       <option value="mtn">MTN Mobile Money</option>
-                      <option value="vodafone">Vodafone Cash</option>
+                      <option value="vodafone">Telecel Cash</option>
                       <option value="airteltigo">AirtelTigo Money</option>
                     </select>
                   </div>

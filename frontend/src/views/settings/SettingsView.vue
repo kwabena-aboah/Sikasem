@@ -478,6 +478,55 @@
                   <span>Auto-disburse after payroll approval</span>
                 </label>
               </div>
+
+              <div class="col-12">
+                <div class="p-3 mt-2" style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:10px">
+                  <div style="font-size:13px;font-weight:700;color:#1D4ED8">Paystack API configuration</div>
+                  <div style="font-size:12px;color:var(--sk-gray-600);margin-top:4px">
+                    Required before sending salaries by bank transfer or MTN, Telecel, or AirtelTigo MoMo.
+                    Your secret key is write-only and is never displayed after saving.
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="sk-form-group">
+                  <label class="sk-label">Paystack Secret Key</label>
+                  <input
+                    type="password"
+                    class="sk-input"
+                    v-model="payrollSettings.paystack_secret_key"
+                    placeholder="sk_live_… or sk_test_…"
+                    autocomplete="new-password"
+                  />
+                  <div style="font-size:11px;color:var(--sk-gray-400);margin-top:3px">
+                    Leave blank to keep the saved key.
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="sk-form-group">
+                  <label class="sk-label">Paystack Public Key (optional)</label>
+                  <input
+                    type="text"
+                    class="sk-input"
+                    v-model="payrollSettings.paystack_public_key"
+                    placeholder="pk_live_… or pk_test_…"
+                  />
+                </div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="sk-form-group">
+                  <label class="sk-label">Paystack API URL</label>
+                  <input
+                    type="url"
+                    class="sk-input"
+                    v-model="payrollSettings.paystack_base_url"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -539,6 +588,9 @@ const payrollSettings = ref({
   leave_accrual_method: 'monthly',
   payment_provider: 'paystack',
   auto_disburse: false,
+  paystack_secret_key: '',
+  paystack_public_key: '',
+  paystack_base_url: 'https://api.paystack.co',
   notify_payslip_ready: true,
   notify_leave_approved: true,
   notify_loan_approved: true,
