@@ -164,9 +164,13 @@ const employmentFields = computed(() => {
     { label: 'Tax Treatment', value: employee.value.tax_treatment?.replace('_', ' ') },
     { label: 'SSNIT Number', value: employee.value.ssnit_number },
     { label: 'TIN', value: employee.value.tin },
-    { label: 'Bank', value: employee.value.bank_name },
-    { label: 'Account', value: employee.value.account_number },
     { label: 'Payment Method', value: employee.value.payment_method?.replace('_', ' ') },
+    { label: 'Bank', value: employee.value.bank_name },
+    { label: 'Bank Code', value: employee.value.bank_code },
+    { label: 'Account', value: employee.value.account_number },
+    { label: 'Account Name', value: employee.value.account_name },
+    { label: 'Mobile Money', value: employee.value.mobile_money_number },
+    { label: 'Mobile Provider', value: employee.value.mobile_money_provider },
   ]
 })
 

@@ -8,6 +8,7 @@ Handles all Ghana-compliant payroll computations:
 - Late penalties
 - Custom rules engine
 """
+import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 from django.utils import timezone
@@ -207,6 +208,23 @@ def calculate_late_penalty(minutes_late: int, daily_rate: Decimal) -> Decimal:
     return quantize(minute_rate * minutes_late)
 
 
+def get_salary_assignment_for_period(employee, period):
+    """Return the salary assignment that covers a payroll period.
+
+    Historical payroll runs must use the assignment valid for their dates,
+    even when that assignment is no longer marked as current. If assignments
+    overlap, the latest effective assignment wins.
+    """
+    return employee.salary_assignments.filter(
+        effective_from__lte=period.period_end,
+        structure__company=period.company,
+    ).filter(
+        Q(effective_to__isnull=True) | Q(effective_to__gte=period.period_start)
+    ).select_related('structure').order_by(
+        '-effective_from', '-created_at'
+    ).first()
+
+
 class PayrollCalculator:
     """
     Main payroll calculator for a single employee in a period.
@@ -227,14 +245,10 @@ class PayrollCalculator:
         """Run full payroll calculation for this employee"""
         ps = self.payslip
 
-        # 1. Get current salary assignment
-        salary_assignment = self.employee.salary_assignments.filter(
-            is_current=True,
-            effective_from__lte=self.period.period_end,
-        ).filter(
-            Q(effective_to__isnull=True) | Q(effective_to__gte=self.period.period_start),
-            structure__company=self.company,
-        ).select_related('structure').first()
+        # 1. Get the assignment that covers this payroll period.
+        salary_assignment = get_salary_assignment_for_period(
+            self.employee, self.period
+        )
 
         if not salary_assignment:
             logger.warning('No valid salary assignment for %s in company %s', self.employee, self.company.id)

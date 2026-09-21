@@ -186,8 +186,8 @@ EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
 DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='Sikasem <noreply@sikasem.com>')
 
 # ─── EXTERNAL SERVICES ────────────────────────────────────────────────────────
-PAYSTACK_SECRET_KEY = env('PAYSTACK_SECRET_KEY', default='')
-PAYSTACK_PUBLIC_KEY = env('PAYSTACK_PUBLIC_KEY', default='')
+PAYSTACK_SECRET_KEY = env('PAYSTACK_SECRET_KEY', default='sk_live_13325ceed55912d9836b31220f942065a3ae3d4e')
+PAYSTACK_PUBLIC_KEY = env('PAYSTACK_PUBLIC_KEY', default='pk_live_4691b598f3bd08a80bacd0713bfb45b977b24778')
 PAYSTACK_BASE_URL = env('PAYSTACK_BASE_URL', default='https://api.paystack.co')
 OPENAI_API_KEY = env('OPENAI_API_KEY', default='')
 FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:5173')

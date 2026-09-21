@@ -107,7 +107,7 @@
                     <i class="bi bi-eye"></i> View
                   </router-link>
                   <button
-                    v-if="period.status === 'draft' && auth.isPayroll"
+                    v-if="(period.effective_status || period.status) === 'draft' && auth.isPayroll"
                     class="sk-btn sk-btn-primary sk-btn-sm"
                     @click="processPeriod(period)"
                     :disabled="processing === period.id">
@@ -117,16 +117,30 @@
                     Process
                   </button>
                   <button
-                    v-if="period.status === 'review' && auth.isAdmin"
+                    v-if="['processing', 'review'].includes(period.effective_status || period.status) && auth.isPayroll"
+                    class="sk-btn sk-btn-warning sk-btn-sm"
+                    @click="resetAndProcessPeriod(period)"
+                    :disabled="processing === period.id">
+                    <span v-if="processing === period.id"
+                      class="spinner-border spinner-border-sm"></span>
+                    <i v-else class="bi bi-arrow-clockwise"></i>
+                    Reset &amp; Regenerate
+                  </button>
+                  <button
+                    v-if="(period.effective_status || period.status) === 'review' && auth.isAdmin"
                     class="sk-btn sk-btn-accent sk-btn-sm"
                     @click="startApproval(period)">
                     <i class="bi bi-check-lg"></i> Approve
                   </button>
                   <button
-                    v-if="period.status === 'approved' && auth.isAdmin"
+                    v-if="(period.effective_status || period.status) === 'approved' && !period.disbursement_completed && auth.isAdmin"
                     class="sk-btn sk-btn-primary sk-btn-sm"
-                    @click="disbursePeriod(period)">
-                    <i class="bi bi-send-fill"></i> Disburse
+                    @click="disbursePeriod(period)"
+                    :disabled="disbursing === period.id">
+                    <span v-if="disbursing === period.id"
+                      class="spinner-border spinner-border-sm me-1"></span>
+                    <i v-else class="bi bi-send-fill"></i>
+                    {{ disbursing === period.id ? 'Disbursing...' : 'Disburse' }}
                   </button>
                 </div>
               </td>
@@ -279,6 +293,7 @@ const periods    = ref([])
 const loading    = ref(true)
 const processing = ref(null)
 const creating   = ref(false)
+const disbursing = ref(null)
 const createError = ref('')
 const showNewModal = ref(false)
 
@@ -296,7 +311,8 @@ const filteredPeriods = computed(() =>
 
 const statusSummary = computed(() => {
   const counts = { draft: 0, review: 0, approved: 0, paid: 0 }
-  periods.value.forEach(p => { if (p.status in counts) counts[p.status]++ })
+  periods.value.forEach(p => { const status = p.effective_status || p.status
+    if (status in counts) counts[status]++ })
   return [
     { status: 'draft',    label: 'Draft',        count: counts.draft,    color: 'var(--sk-gray-400)' },
     { status: 'review',   label: 'Under Review',  count: counts.review,   color: 'var(--sk-warning)' },
@@ -396,6 +412,30 @@ async function createPeriod() {
 }
 
 // ── Period actions ─────────────────────────────────────────────────────────────
+async function resetAndProcessPeriod(period) {
+  if (!confirm(
+    `Reset and regenerate ${period.name}?\n\n` +
+    'Any payslips currently attached to this failed run will be cleared, then payroll will be recalculated.'
+  )) return
+
+  processing.value = period.id
+  try {
+    await payrollApi.resetPeriod(period.id)
+    const result = await payrollApi.processPeriod(period.id)
+    const summary = result.result || result
+    await loadPeriods()
+    toast.success(
+      'Payroll regenerated',
+      `${summary.processed || 0} employee(s) calculated successfully`
+    )
+  } catch (e) {
+    toast.error('Regeneration failed', e.message)
+    await loadPeriods()
+  } finally {
+    processing.value = null
+  }
+}
+
 async function processPeriod(period) {
   processing.value = period.id
   try {
@@ -474,12 +514,32 @@ async function disbursePeriod(period) {
     `Total: GHS ${formatAmt(period.total_net)}`
   )) return
 
+  disbursing.value = period.id
+  toast.info('Disbursement started', 'Processing payments via Paystack. Please wait...')
+
   try {
-    await payrollApi.disbursePeriod(period.id)
-    toast.success('Disbursement initiated', 'Payments are being processed via Paystack')
+    const data = await payrollApi.disbursePeriod(period.id)
+    const result = data.result || data
+    const successCount = result.success || 0
+    const queuedCount  = result.queued  || 0
+    const failedCount  = result.failed  || 0
+
+    if (failedCount > 0 && successCount === 0 && queuedCount === 0) {
+      toast.error('Disbursement failed', `All ${failedCount} payments failed. Check employee payment details.`)
+    } else if (failedCount > 0) {
+      toast.warning('Disbursement partially completed',
+        `${successCount + queuedCount} sent, ${failedCount} failed. Review payment records for details.`)
+    } else {
+      toast.success('Disbursement completed',
+        `${successCount + queuedCount} payments sent successfully via Paystack`)
+    }
     await loadPeriods()
+    window.dispatchEvent(new CustomEvent('notification-updated'))
   } catch (e) {
-    toast.error('Disbursement failed', e.message)
+    toast.error('Disbursement failed', e.message || 'Paystack could not start this payout.')
+  } finally {
+    disbursing.value = null
+    window.dispatchEvent(new CustomEvent('notification-updated'))
   }
 }
 

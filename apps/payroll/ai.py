@@ -40,6 +40,14 @@ class PayrollAnomalyDetector:
             payroll_period=self.period
         ).select_related('employee')
 
+        # Rebuild flags from the current calculated values. Without clearing
+        # first, a warning from an older payroll calculation remains visible
+        # even after the payslip has been regenerated and corrected.
+        payslips.filter(is_anomaly=True).update(
+            is_anomaly=False,
+            anomaly_notes='',
+        )
+
         for payslip in payslips:
             self._check_payslip(payslip)
 
@@ -64,7 +72,8 @@ class PayrollAnomalyDetector:
                 issues.append({
                     'type': 'excessive_deductions',
                     'severity': 'high',
-                    'message': f'Deductions are {deduction_ratio*100:.1f}% of gross pay'
+                    'message': f'Deductions are {deduction_ratio*100:.1f}% of gross pay',
+                    'resolution': 'Review loan and other deductions; correct any duplicate or excessive deductions, then regenerate payroll.'
                 })
 
         # 3. No PAYE on taxable income > threshold

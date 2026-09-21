@@ -68,6 +68,30 @@ class EmployeeDetailSerializer(serializers.ModelSerializer):
         """employee_id must be unique within the company — enforced in view.perform_create"""
         return value
 
+    def validate(self, attrs):
+        """Clear stale Paystack recipient when payout routing changes, and auto-fill bank_code if bank is selected."""
+        payment_method = attrs.get('payment_method') or (self.instance.payment_method if self.instance else 'bank')
+        if payment_method == 'bank':
+            bank_name = attrs.get('bank_name') or (self.instance.bank_name if self.instance else '')
+            bank_code = attrs.get('bank_code') or (self.instance.bank_code if self.instance else '')
+            if bank_name and not bank_code:
+                from .constants import resolve_bank_code
+                resolved = resolve_bank_code(bank_name)
+                if resolved:
+                    attrs['bank_code'] = resolved
+
+        if self.instance:
+            routing_fields = (
+                'payment_method', 'bank_name', 'bank_code', 'account_number',
+                'account_name', 'mobile_money_number', 'mobile_money_provider',
+            )
+            if any(
+                field in attrs and attrs[field] != getattr(self.instance, field)
+                for field in routing_fields
+            ):
+                attrs['paystack_recipient_code'] = ''
+        return attrs
+
     def validate_department(self, dept):
         """Department must belong to same company (validated via view queryset context)"""
         return dept

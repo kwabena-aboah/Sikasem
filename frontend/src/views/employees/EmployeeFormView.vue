@@ -401,9 +401,9 @@
                 <div class="col-md-6">
                   <div class="sk-form-group">
                     <label class="sk-label">Bank Name</label>
-                    <select class="sk-select" v-model="form.bank_name">
+                    <select class="sk-select" v-model="form.bank_name" @change="onBankSelected">
                       <option value="">Select bank...</option>
-                      <option v-for="b in ghanaBanks" :key="b" :value="b">{{ b }}</option>
+                      <option v-for="b in ghanaBanks" :key="b.code" :value="b.name">{{ b.name }}</option>
                     </select>
                   </div>
                 </div>
@@ -411,6 +411,14 @@
                   <div class="sk-form-group">
                     <label class="sk-label">Bank Branch</label>
                     <input type="text" class="sk-input" v-model.trim="form.bank_branch" placeholder="e.g. Accra Main" />
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <div class="sk-form-group">
+                    <label class="sk-label">Paystack Bank Code <span class="text-danger">*</span></label>
+                    <input type="text" class="sk-input" v-model.trim="form.bank_code" readonly
+                      style="background:var(--sk-gray-50);cursor:not-allowed" />
+                    <div style="font-size:11px;color:var(--sk-gray-500);margin-top:3px">Auto-filled when you select a bank above.</div>
                   </div>
                 </div>
                 <div class="col-md-6">
@@ -483,7 +491,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { employeeApi, companyApi } from '@/utils/api'
 import { useToastStore } from '@/stores/toast'
@@ -544,15 +552,61 @@ const ghanaRegions = [
   'Upper East', 'Upper West', 'Volta', 'Western', 'Western North',
 ]
 
+// Paystack-supported Ghanaian banks with their official bank codes
 const ghanaBanks = [
-  'Absa Bank Ghana', 'Access Bank Ghana', 'Agricultural Development Bank (ADB)',
-  'Cal Bank', 'Consolidated Bank Ghana', 'Ecobank Ghana', 'FBN Bank Ghana',
-  'Fidelity Bank Ghana', 'First Atlantic Bank', 'First National Bank',
-  'GCB Bank', 'Ghana Commercial Bank', 'GT Bank Ghana', 'National Investment Bank (NIB)',
-  'OmniBSIC Bank', 'Prudential Bank', 'Republic Bank', 'Société Générale Ghana',
-  'Stanbic Bank Ghana', 'Standard Chartered Bank Ghana', 'UBA Ghana',
-  'Universal Merchant Bank', 'Zenith Bank Ghana',
+  { name: 'Absa Bank Ghana', code: '030100' },
+  { name: 'Access Bank Ghana', code: '280100' },
+  { name: 'Agricultural Development Bank (ADB)', code: '080100' },
+  { name: 'Bank of Africa Ghana', code: '210100' },
+  { name: 'Bank of Ghana', code: '010100' },
+  { name: 'Cal Bank', code: '140100' },
+  { name: 'Consolidated Bank Ghana', code: '340100' },
+  { name: 'Ecobank Ghana', code: '130100' },
+  { name: 'FBN Bank Ghana', code: '200100' },
+  { name: 'Fidelity Bank Ghana', code: '240100' },
+  { name: 'First Atlantic Bank', code: '170100' },
+  { name: 'First National Bank', code: '330100' },
+  { name: 'GCB Bank', code: '040100' },
+  { name: 'GT Bank Ghana', code: '230100' },
+  { name: 'National Investment Bank (NIB)', code: '050100' },
+  { name: 'OmniBSIC Bank', code: '360100' },
+  { name: 'Prudential Bank', code: '180100' },
+  { name: 'Republic Bank', code: '110100' },
+  { name: 'Société Générale Ghana', code: '090100' },
+  { name: 'Stanbic Bank Ghana', code: '190100' },
+  { name: 'Standard Chartered Bank Ghana', code: '020100' },
+  { name: 'UBA Ghana', code: '060100' },
+  { name: 'Universal Merchant Bank', code: '100100' },
+  { name: 'Zenith Bank Ghana', code: '120100' },
 ]
+
+function resolveBankCode(bankName) {
+  if (!bankName) return ''
+  const bClean = bankName.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const found = ghanaBanks.find(b => {
+    const nameClean = b.name.toLowerCase().replace(/[^a-z0-9]/g, '')
+    return nameClean.includes(bClean) || bClean.includes(nameClean)
+  })
+  return found ? found.code : ''
+}
+
+// Auto-fill bank_code when user selects a bank name
+function onBankSelected() {
+  form.value.bank_code = resolveBankCode(form.value.bank_name)
+}
+
+// Watch both payment_method and bank_name to ensure bank_code is auto-filled
+watch(
+  () => [form.value.payment_method, form.value.bank_name],
+  ([method, bankName]) => {
+    if (method === 'bank' && bankName) {
+      const code = resolveBankCode(bankName)
+      if (code) {
+        form.value.bank_code = code
+      }
+    }
+  }
+)
 
 // ── Validation ─────────────────────────────────────────────────────────────────
 function validateStep(step) {
@@ -572,6 +626,9 @@ function validateStep(step) {
   if (step === 2) {
     if (form.value.payment_method === 'bank' && !form.value.account_number) {
       errors.push('Bank account number is required')
+    }
+    if (form.value.payment_method === 'bank' && !form.value.bank_code) {
+      errors.push('Paystack bank code is required for bank payments')
     }
     if (form.value.payment_method === 'mobile_money' && !form.value.mobile_money_number) {
       errors.push('Mobile money number is required')
@@ -698,6 +755,9 @@ onMounted(async () => {
         form.value.reports_to = emp.reports_to.id
       }
       form.value.id = emp.id
+      if (form.value.payment_method === 'bank' && form.value.bank_name && !form.value.bank_code) {
+        form.value.bank_code = resolveBankCode(form.value.bank_name)
+      }
     }
 
   } catch (e) {

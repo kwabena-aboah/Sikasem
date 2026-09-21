@@ -12,7 +12,7 @@ from rest_framework.permissions import AllowAny
 from django.views.decorators.csrf import csrf_exempt
 from django.conf import settings
 from django.utils import timezone
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from kombu.exceptions import OperationalError as BrokerOperationalError
 from django.http import HttpResponse
 from django.db.models import Sum, Count, Avg, Q
@@ -148,6 +148,53 @@ class PayrollPeriodViewSet(viewsets.ModelViewSet):
             )
 
     @action(detail=True, methods=['post'])
+    def reset(self, request, pk=None):
+        """Clear a failed, unapproved run so it can be processed again."""
+        period = self.get_object()
+
+        if period.status not in (
+            PayrollPeriod.Status.PROCESSING,
+            PayrollPeriod.Status.REVIEW,
+        ):
+            return Response(
+                {'error': 'Only processing or under-review payrolls can be reset.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            payslips = period.payslips.all()
+            payslip_count = payslips.count()
+
+            # A failed run may already have marked loan installments as
+            # deducted. Restore them before removing the payslips so a retry
+            # can apply those deductions exactly once.
+            from apps.loans.models import LoanRepayment
+            LoanRepayment.objects.filter(deducted_in__in=payslips).update(
+                status=LoanRepayment.Status.PENDING,
+                deducted_in=None,
+            )
+            payslips.delete()
+            period.status = PayrollPeriod.Status.DRAFT
+            period.processed_at = None
+            period.total_gross = 0
+            period.total_deductions = 0
+            period.total_net = 0
+            period.total_employer_costs = 0
+            period.employee_count = 0
+            period.ai_anomalies_detected = []
+            period.save(update_fields=[
+                'status', 'processed_at', 'total_gross', 'total_deductions',
+                'total_net', 'total_employer_costs', 'employee_count',
+                'ai_anomalies_detected', 'updated_at',
+            ])
+
+        return Response({
+            'message': 'Payroll reset successfully and ready to process again.',
+            'period_id': str(period.id),
+            'deleted_payslips': payslip_count,
+        })
+
+    @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         """Approve a payroll period"""
         period = self.get_object()
@@ -214,13 +261,21 @@ class PayrollPeriodViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if not Payslip.objects.filter(
-            payroll_period=period,
+        approved_payslips = period.payslips.filter(
             status=Payslip.Status.APPROVED,
-        ).exists():
-            return Response({
-                'error': 'No approved payslips are available for disbursement. Approve the payroll period first.'
-            }, status=status.HTTP_400_BAD_REQUEST)
+        )
+        if not approved_payslips.exists():
+            # Compatibility for periods approved before approval also locked
+            # their generated payslips. Do not promote disputed/paid slips.
+            approved_payslips = period.payslips.filter(
+                status=Payslip.Status.GENERATED,
+            )
+            if approved_payslips.exists():
+                approved_payslips.update(status=Payslip.Status.APPROVED)
+            else:
+                return Response({
+                    'error': 'No approved payslips are available for disbursement. Approve the payroll period first.'
+                }, status=status.HTTP_400_BAD_REQUEST)
 
         from .tasks import disburse_payroll_task
         task_args = [str(period.id), str(request.user.id)]
@@ -234,9 +289,16 @@ class PayrollPeriodViewSet(viewsets.ModelViewSet):
                 return Response({
                     'error': str(result.result),
                 }, status=status.HTTP_400_BAD_REQUEST)
+            task_result = result.result or {}
+            if task_result.get('batch_status') == 'failed':
+                return Response({
+                    'error': 'No employee payments were submitted.',
+                    'details': task_result.get('error_message', 'Check each employee payment method and account details.'),
+                    'result': task_result,
+                }, status=status.HTTP_400_BAD_REQUEST)
             return Response({
                 'message': 'Payment disbursement completed',
-                'result': result.result,
+                'result': task_result,
             })
 
         try:
@@ -256,13 +318,18 @@ class PayrollPeriodViewSet(viewsets.ModelViewSet):
     def anomalies(self, request, pk=None):
         """Get AI-detected anomalies for this period"""
         period = self.get_object()
-        anomalies = Payslip.objects.filter(
-            payroll_period=period, is_anomaly=True
-        ).select_related('employee')
+        # Re-run detection so the review screen never shows stale flags from
+        # an earlier payroll calculation.
+        detected = PayrollAnomalyDetector(period).detect()
 
         return Response({
-            'count': anomalies.count(),
-            'anomalies': PayslipSerializer(anomalies, many=True).data
+            'count': len(detected),
+            'anomalies': detected,
+            'can_approve': True,
+            'message': (
+                'Review the recommended resolutions before approval. '
+                'Warnings do not block payment once the payroll is approved.'
+            ),
         })
 
     @action(detail=True, methods=['post'])

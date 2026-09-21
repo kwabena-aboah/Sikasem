@@ -51,6 +51,9 @@ class EmployeeSalarySerializer(serializers.ModelSerializer):
 
 class PayrollPeriodSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
+    disbursement_completed = serializers.SerializerMethodField()
+    effective_status = serializers.SerializerMethodField()
+    effective_status_display = serializers.SerializerMethodField()
 
     class Meta:
         model = PayrollPeriod
@@ -86,6 +89,14 @@ class PayrollPeriodSerializer(serializers.ModelSerializer):
 
         return attrs
 
+    def get_disbursement_completed(self, obj):
+        return obj.payment_batches.filter(status='completed').exists()
+
+    def get_effective_status(self, obj):
+        return 'paid' if self.get_disbursement_completed(obj) else obj.status
+
+    def get_effective_status_display(self, obj):
+        return 'Paid' if self.get_disbursement_completed(obj) else obj.get_status_display()
 
 
 class PayslipSerializer(serializers.ModelSerializer):

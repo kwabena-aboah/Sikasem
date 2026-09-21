@@ -1,8 +1,11 @@
 """apps/payroll/tasks.py - Celery async tasks"""
 from celery import shared_task
 import logging
+import requests as _requests
 
 logger = logging.getLogger(__name__)
+
+_PAYSTACK_BANKS = None
 
 
 @shared_task(bind=True, max_retries=3)
@@ -46,6 +49,7 @@ def generate_all_payslip_pdfs(period_id: str):
 
 @shared_task
 def disburse_payroll_task(period_id: str, initiated_by_id: str):
+    global _PAYSTACK_BANKS
     """Create Paystack recipients and initiate one bulk Ghana bank transfer."""
     from decimal import Decimal
     import requests
@@ -65,15 +69,43 @@ def disburse_payroll_task(period_id: str, initiated_by_id: str):
             'in System Settings > Payment Settings before salary payments can be made.'
         )
 
-    existing = PaymentBatch.objects.filter(
-        payroll_period=period, status__in=['processing', 'completed']
+    # Reuse an existing batch on retries. A partial batch may already contain
+    # successful transfers, so creating a new batch would reuse the same
+    # references and can trigger Paystack/DB duplicate-reference errors.
+    candidate_batches = PaymentBatch.objects.filter(
+        payroll_period=period,
+        status__in=['pending', 'processing', 'partial'],
+    )
+    # Prefer the batch that already owns payment records. A failed retry may
+    # have left behind an empty processing batch after the original partial
+    # batch was created.
+    batch = candidate_batches.filter(
+        payments__isnull=False,
+    ).distinct().order_by('-initiated_at').first()
+    batch = batch or candidate_batches.order_by('-initiated_at').first()
+    completed_batch = PaymentBatch.objects.filter(
+        payroll_period=period, status='completed'
     ).order_by('-initiated_at').first()
-    if existing:
-        return {'batch_id': str(existing.id), 'message': 'A disbursement already exists for this payroll period.'}
+    if completed_batch:
+        return {
+            'batch_id': str(completed_batch.id),
+            'message': 'A disbursement already completed for this payroll period.',
+        }
 
     payslips = list(Payslip.objects.filter(
         payroll_period=period, status='approved'
     ).select_related('employee'))
+    if batch is None:
+        batch = PaymentBatch.objects.create(
+            payroll_period=period,
+            total_amount=sum((p.net_pay for p in payslips), Decimal('0')),
+            initiated_by_id=initiated_by_id,
+            status='processing',
+        )
+    else:
+        batch.status = PaymentBatch.Status.PROCESSING
+        batch.total_amount = sum((p.net_pay for p in payslips), Decimal('0'))
+        batch.save(update_fields=['status', 'total_amount'])
     if not payslips:
         raise RuntimeError('No approved payslips are available for disbursement.')
 
@@ -96,49 +128,82 @@ def disburse_payroll_task(period_id: str, initiated_by_id: str):
             raise RuntimeError(data.get('message', f'Paystack request failed ({response.status_code}).'))
         return data.get('data')
 
-    batch = PaymentBatch.objects.create(
-        payroll_period=period,
-        total_amount=sum((p.net_pay for p in payslips), Decimal('0')),
-        initiated_by_id=initiated_by_id,
-        status='processing',
-    )
     transfers = []
     records = {}
 
     for payslip in payslips:
         employee = payslip.employee
         reference = f'pay_{payslip.id}'[:50]
-        record = PaymentRecord.objects.create(
-            batch=batch, payslip=payslip, employee=employee,
-            amount=payslip.net_pay,
-            payment_method=employee.payment_method,
-            account_number=employee.account_number or employee.mobile_money_number,
-            mobile_number=employee.mobile_money_number,
-            bank_name=employee.bank_name,
-            transfer_reference=reference,
+        record, _ = PaymentRecord.objects.update_or_create(
+            payslip=payslip,
+            defaults={
+                'batch': batch,
+                'employee': employee,
+                'amount': payslip.net_pay,
+                'payment_method': employee.payment_method,
+                'account_number': employee.account_number or employee.mobile_money_number,
+                'mobile_number': employee.mobile_money_number,
+                'bank_name': employee.bank_name,
+                'transfer_reference': reference,
+            }
         )
 
+        if record.status == PaymentRecord.Status.SUCCESS:
+            continue
+
         try:
+            # Skip non-electronic methods (cash, cheque) – mark as successful offline
+            if employee.payment_method not in ['bank', 'mobile_money']:
+                record.status = PaymentRecord.Status.SUCCESS
+                record.save(update_fields=['transfer_reference', 'status'])
+                continue
+
             if employee.payment_method == 'bank':
                 recipient_type = 'ghipss'
                 account_number = employee.account_number
                 bank_code = employee.bank_code
-                if not account_number or not bank_code:
-                    raise RuntimeError('Bank account number and Paystack bank code are required.')
+                if not account_number:
+                    raise RuntimeError('Bank account number is required.')
+
+                from apps.employees.constants import resolve_bank_code, GHANA_PAYSTACK_BANKS, PAYSTACK_MOMO_PROVIDERS
+                if _PAYSTACK_BANKS is None:
+                    try:
+                        resp = _requests.get(f'{base_url}/bank', params={'currency': 'GHS', 'perPage': 500}, headers=headers, timeout=30)
+                        if resp.ok:
+                            _PAYSTACK_BANKS = resp.json().get('data') or []
+                        else:
+                            _PAYSTACK_BANKS = GHANA_PAYSTACK_BANKS
+                    except Exception:
+                        _PAYSTACK_BANKS = GHANA_PAYSTACK_BANKS
+
+                if not bank_code:
+                    bank_code = resolve_bank_code(employee.bank_name)
+                    if not bank_code and _PAYSTACK_BANKS:
+                        matched = next(
+                            (b for b in _PAYSTACK_BANKS
+                             if employee.bank_name.lower() in b.get('name', '').lower()
+                             or b.get('name', '').lower() in employee.bank_name.lower()),
+                            None
+                        )
+                        if matched:
+                            bank_code = matched.get('code')
+                if not bank_code:
+                    raise RuntimeError(f"Unable to resolve Paystack bank code for bank '{employee.bank_name}'. Please select a supported bank.")
+
+                if not employee.bank_code or employee.bank_code != bank_code:
+                    employee.bank_code = bank_code
+                    employee.save(update_fields=['bank_code'])
+
             elif employee.payment_method == 'mobile_money':
+                from apps.employees.constants import PAYSTACK_MOMO_PROVIDERS
                 recipient_type = 'mobile_money'
                 account_number = employee.mobile_money_number
-                bank_code = {
-                    'mtn': 'mtn',
-                    'vodafone': 'vod',
-                    'airteltigo': 'tgo',
-                }.get(employee.mobile_money_provider, '')
+                provider_clean = (employee.mobile_money_provider or '').lower().strip()
+                bank_code = PAYSTACK_MOMO_PROVIDERS.get(provider_clean, provider_clean.upper())
                 if not account_number or not bank_code:
                     raise RuntimeError(
-                        'Mobile money number and a supported provider (MTN, Telecel, or AirtelTigo) are required.'
+                        'Mobile money number and a supported provider (MTN, Telecel/Vodafone, or AirtelTigo) are required.'
                     )
-            else:
-                raise RuntimeError('Employee payment method must be Bank Transfer or Mobile Money.')
 
             recipient_code = employee.paystack_recipient_code
             if not recipient_code:
@@ -170,30 +235,117 @@ def disburse_payroll_task(period_id: str, initiated_by_id: str):
             record.save(update_fields=['transfer_reference', 'status', 'failure_reason'])
 
     if transfers:
-        result = paystack_post('/transfer/bulk', {
-            'currency': 'GHS',
-            'source': 'balance',
-            'transfers': transfers,
-        })
-        for item in result or []:
-            record = records.get(item.get('reference'))
-            if not record:
-                continue
-            transfer_status = item.get('status', 'pending').lower()
-            record.provider_reference = item.get('transfer_code', '')
-            record.status = PaymentRecord.Status.SUCCESS if transfer_status == 'success' else PaymentRecord.Status.SENT
-            record.save(update_fields=['provider_reference', 'status'])
+        try:
+            result = paystack_post('/transfer/bulk', {
+                'currency': 'GHS',
+                'source': 'balance',
+                'transfers': transfers,
+            })
+            for item in result or []:
+                record = records.get(item.get('reference'))
+                if not record:
+                    continue
+                transfer_status = item.get('status', 'pending').lower()
+                record.provider_reference = item.get('transfer_code', '')
+                record.status = PaymentRecord.Status.SUCCESS if transfer_status == 'success' else PaymentRecord.Status.SENT
+                record.save(update_fields=['provider_reference', 'status'])
+        except Exception as exc:
+            logger.error(f'Paystack bulk transfer failed: {exc}')
+            err_msg = str(exc)
+            for ref, record in records.items():
+                if record.status != PaymentRecord.Status.SUCCESS:
+                    record.status = PaymentRecord.Status.FAILED
+                    record.failure_reason = err_msg
+                    record.save(update_fields=['status', 'failure_reason'])
+            batch.error_message = err_msg
 
-    failed = batch.payments.filter(status=PaymentRecord.Status.FAILED).count()
+    failed_records = batch.payments.filter(status=PaymentRecord.Status.FAILED)
+    failed = failed_records.count()
     sent_or_success = batch.payments.filter(status__in=[PaymentRecord.Status.SENT, PaymentRecord.Status.SUCCESS]).count()
-    batch.status = 'completed' if sent_or_success == len(payslips) and all(r.status == PaymentRecord.Status.SUCCESS for r in batch.payments.all()) else ('partial' if failed else 'processing')
-    if batch.status == 'completed':
+    if sent_or_success == len(payslips) and all(r.status == PaymentRecord.Status.SUCCESS for r in batch.payments.all()):
+        batch.status = PaymentBatch.Status.COMPLETED
+    elif sent_or_success:
+        batch.status = PaymentBatch.Status.PARTIAL
+    else:
+        batch.status = PaymentBatch.Status.FAILED
+        batch.error_message = '; '.join(
+            f'{r.employee.get_full_name()}: {r.failure_reason}'
+            for r in failed_records
+        )[:5000]
+    if batch.status == PaymentBatch.Status.COMPLETED:
         batch.completed_at = timezone.now()
         period.status = PayrollPeriod.Status.PAID
         period.paid_at = timezone.now()
         period.save(update_fields=['status', 'paid_at', 'updated_at'])
-    batch.save(update_fields=['status', 'completed_at'])
-    return {'batch_id': str(batch.id), 'success': batch.payments.filter(status=PaymentRecord.Status.SUCCESS).count(), 'queued': batch.payments.filter(status=PaymentRecord.Status.SENT).count(), 'failed': failed}
+    batch.save(update_fields=['status', 'completed_at', 'error_message'])
+
+    # ── Create in-app notifications ─────────────────────────────────────────
+    try:
+        from apps.notifications.models import Notification
+        from apps.accounts.models import User
+
+        # Notify company admins and payroll staff
+        admin_users = User.objects.filter(
+            company=period.company,
+            role__in=['company_admin', 'hr_manager', 'payroll_officer', 'finance_manager'],
+            is_active=True,
+        )
+        success_count = batch.payments.filter(status=PaymentRecord.Status.SUCCESS).count()
+        sent_count = batch.payments.filter(status=PaymentRecord.Status.SENT).count()
+        failed_count = batch.payments.filter(status=PaymentRecord.Status.FAILED).count()
+        total_sent = success_count + sent_count
+
+        if batch.status == PaymentBatch.Status.COMPLETED:
+            notif_title = f'Payroll Disbursed: {period.name}'
+            notif_msg = f'All {total_sent} salary payments for {period.name} have been sent successfully via Paystack.'
+        elif batch.status == PaymentBatch.Status.PARTIAL:
+            notif_title = f'Payroll Partially Disbursed: {period.name}'
+            notif_msg = f'{total_sent} payments sent, {failed_count} failed for {period.name}. Review payment records for details.'
+        else:
+            notif_title = f'Payroll Disbursement Failed: {period.name}'
+            notif_msg = f'Disbursement failed for {period.name}. {batch.error_message[:200]}'
+
+        notifications_to_create = []
+        for user in admin_users:
+            notifications_to_create.append(Notification(
+                recipient=user,
+                notif_type=Notification.NotifType.PAYROLL,
+                title=notif_title,
+                message=notif_msg,
+                link=f'/payroll/periods/{period.id}',
+            ))
+
+        # Also notify each employee whose payslip was paid and has an active user account
+        paid_payslips = Payslip.objects.filter(
+            payroll_period=period,
+            status='approved',
+            employee__user__isnull=False,
+        ).select_related('employee__user')
+        for ps in paid_payslips:
+            emp_record = batch.payments.filter(employee=ps.employee).first()
+            if emp_record and emp_record.status in [PaymentRecord.Status.SUCCESS, PaymentRecord.Status.SENT]:
+                notifications_to_create.append(Notification(
+                    recipient=ps.employee.user,
+                    notif_type=Notification.NotifType.PAYSLIP,
+                    title=f'Salary Disbursed: {period.name}',
+                    message=f'Your salary for {period.name} (GHS {ps.net_pay:,.2f}) has been sent via {ps.employee.get_payment_method_display() if hasattr(ps.employee, "get_payment_method_display") else ps.employee.payment_method}.',
+                    link=f'/payroll/payslips/{ps.id}',
+                ))
+
+        if notifications_to_create:
+            Notification.objects.bulk_create(notifications_to_create)
+            logger.info(f'Created {len(notifications_to_create)} notifications for {period.name} disbursement')
+    except Exception as notif_exc:
+        logger.warning(f'Failed to create disbursement notifications: {notif_exc}')
+
+    return {
+        'batch_id': str(batch.id),
+        'success': batch.payments.filter(status=PaymentRecord.Status.SUCCESS).count(),
+        'queued': batch.payments.filter(status=PaymentRecord.Status.SENT).count(),
+        'failed': failed,
+        'batch_status': batch.status,
+        'error_message': batch.error_message,
+    }
 
 
 @shared_task

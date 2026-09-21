@@ -149,6 +149,14 @@ class Employee(models.Model):
         end = self.termination_date or timezone.now().date()
         return (end - self.hire_date).days / 365.25
 
+    def save(self, *args, **kwargs):
+        if self.payment_method == 'bank' and self.bank_name and not self.bank_code:
+            from .constants import resolve_bank_code
+            code = resolve_bank_code(self.bank_name)
+            if code:
+                self.bank_code = code
+        super().save(*args, **kwargs)
+
 
 class EmployeeDocument(models.Model):
     class DocType(models.TextChoices):

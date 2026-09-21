@@ -340,12 +340,14 @@ onMounted(() => {
   loadPendingLeaves()
   document.addEventListener('click', handleOutsideClick)
   window.addEventListener('resize', handleResize)
+  window.addEventListener('notification-updated', loadNotifs)
   notifInterval = setInterval(loadNotifs, 60_000)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleOutsideClick)
   window.removeEventListener('resize', handleResize)
+  window.removeEventListener('notification-updated', loadNotifs)
   clearInterval(notifInterval)
 })
 </script>

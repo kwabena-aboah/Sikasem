@@ -15,6 +15,14 @@
         <button class="sk-btn sk-btn-ghost sk-btn-sm" @click="exportCsv">
           <i class="bi bi-download"></i> Export CSV
         </button>
+        <button
+          v-if="['processing', 'review'].includes(period.status)"
+          class="sk-btn sk-btn-warning sk-btn-sm"
+          :disabled="resetting"
+          @click="resetAndProcess">
+          <span v-if="resetting" class="spinner-border spinner-border-sm"></span>
+          <i v-else class="bi bi-arrow-clockwise"></i> Reset &amp; Regenerate
+        </button>
         <button v-if="period.status === 'approved'" class="sk-btn sk-btn-primary sk-btn-sm" @click="generateAllPdfs">
           <i class="bi bi-file-pdf"></i> Generate PDFs
         </button>
@@ -70,10 +78,25 @@
             AI anomaly detection flagged these payslips for review. Check highlighted rows below.
           </div>
           <div class="d-flex gap-2 mt-2 flex-wrap">
-            <span v-for="a in anomalies.slice(0, 5)" :key="a.id" class="sk-badge badge-anomaly">
+            <span v-for="a in anomalies.slice(0, 5)" :key="a.payslip_id || a.id" class="sk-badge badge-anomaly">
               {{ a.employee_name }}
             </span>
             <span v-if="anomalies.length > 5" style="font-size:12px;color:var(--sk-danger)">+{{ anomalies.length - 5 }} more</span>
+          </div>
+          <div v-for="a in anomalies.slice(0, 3)" :key="`${a.payslip_id || a.id}-details`" class="mt-2" style="font-size:12px;color:var(--sk-gray-700)">
+            <strong>{{ a.employee_name }}:</strong>
+            <span v-for="issue in a.issues" :key="issue.type" class="d-block ms-2">
+              {{ issue.message }} <span v-if="issue.resolution" style="color:var(--sk-gray-500)">— {{ issue.resolution }}</span>
+            </span>
+          </div>
+          <div class="mt-3 d-flex gap-2 align-items-center flex-wrap">
+            <button class="sk-btn sk-btn-warning sk-btn-sm" :disabled="rechecking" @click="recheckAnomalies">
+              <span v-if="rechecking" class="spinner-border spinner-border-sm me-1"></span>
+              <i v-else class="bi bi-arrow-clockwise me-1"></i> Recheck anomalies
+            </button>
+            <span style="font-size:12px;color:var(--sk-gray-600)">
+              Fix the recommendation, regenerate payroll, or approve after confirming the result is intentional.
+            </span>
           </div>
         </div>
       </div>
@@ -227,6 +250,7 @@ const payslips = ref([])
 const anomalies = ref([])
 const loading = ref(true)
 const payslipsLoading = ref(false)
+const resetting = ref(false)
 const search = ref('')
 const filterStatus = ref('')
 const breakdownChart = ref(null)
@@ -257,7 +281,12 @@ async function load() {
       payrollApi.periodAnomalies(id).catch(() => ({ anomalies: [] })),
     ])
     period.value = periodData
-    summary.value = summaryData
+    // The reports endpoint returns aggregate values under `summary`, while
+    // this view uses `statistics` for the KPI and chart bindings.
+    summary.value = {
+      ...(summaryData || {}),
+      statistics: summaryData?.statistics || summaryData?.summary || {},
+    }
     anomalies.value = anomalyData.anomalies || []
 
     payslipsLoading.value = true
@@ -296,6 +325,39 @@ function renderChart() {
       plugins: { legend: { position: 'right', labels: { padding: 12, font: { size: 11 } } } }
     }
   })
+}
+
+async function recheckAnomalies() {
+  rechecking.value = true
+  try {
+    const result = await payrollApi.recheckAnomalies(route.params.id)
+    anomalies.value = result.anomalies || []
+    toast.success('Anomalies refreshed', anomalies.value.length ? `${anomalies.value.length} issue(s) still need review.` : 'No current anomalies remain.')
+  } catch (e) {
+    toast.error('Could not refresh anomalies', e.message)
+  } finally {
+    rechecking.value = false
+  }
+}
+
+async function resetAndProcess() {
+  if (!period.value || !confirm(
+    `Reset and regenerate ${period.value.name}?\n\n` +
+    'Any payslips currently attached to this failed run will be cleared, then payroll will be recalculated.'
+  )) return
+
+  resetting.value = true
+  try {
+    await payrollApi.resetPeriod(period.value.id)
+    await payrollApi.processPeriod(period.value.id)
+    toast.success('Payroll regenerated', 'The employee salaries have been recalculated.')
+    await load()
+  } catch (e) {
+    toast.error('Regeneration failed', e.message)
+    await load()
+  } finally {
+    resetting.value = false
+  }
 }
 
 async function downloadPayslip(id) {

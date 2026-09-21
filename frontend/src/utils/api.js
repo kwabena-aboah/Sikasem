@@ -94,6 +94,7 @@ async function apiFetch(endpoint, options = {}) {
     try { errData = await response.json() } catch {}
     const msg =
       errData.detail ||
+      (errData.error && errData.details ? `${errData.error} ${errData.details}` : null) ||
       errData.error ||
       errData.message ||
       Object.entries(errData)
@@ -170,10 +171,12 @@ export const payrollApi = {
   getPeriod:     (id)     => api.get(`/payroll/periods/${id}/`),
   createPeriod:  (data)   => api.post('/payroll/periods/', data),
   processPeriod: (id)     => api.post(`/payroll/periods/${id}/process/`),
+  resetPeriod:   (id)     => api.post(`/payroll/periods/${id}/reset/`),
   approvePeriod: (id)     => api.post(`/payroll/periods/${id}/approve/`),
   disbursePeriod:(id)     => api.post(`/payroll/periods/${id}/disburse/`),
   periodSummary: (id)     => api.get(`/payroll/periods/${id}/summary/`),
   periodAnomalies:(id)    => api.get(`/payroll/periods/${id}/anomalies/`),
+  recheckAnomalies:(id)   => api.post(`/payroll/periods/${id}/recheck_anomalies/`),
   generateAllPdfs:(id)    => api.post(`/payroll/periods/${id}/generate_pdfs/`),
 
   // Payslips
