@@ -24,7 +24,7 @@ const routes = [
       { path: 'payroll/periods', name: 'payroll-periods', component: () => import('@/views/payroll/PayrollPeriodsView.vue'), meta: { roles: ['hr_manager', 'company_admin', 'super_admin', 'payroll_officer', 'finance_manager'] } },
       { path: 'payroll/periods/:id', name: 'payroll-period-detail', component: () => import('@/views/payroll/PayrollPeriodDetailView.vue'), meta: { roles: ['hr_manager', 'company_admin', 'super_admin', 'payroll_officer', 'finance_manager'] } },
       { path: 'payroll/structures', name: 'salary-structures', component: () => import('@/views/payroll/SalaryStructuresView.vue'), meta: { roles: ['hr_manager', 'company_admin', 'super_admin'] } },
-      { path: 'payroll/employee-salaries', name: 'employee-salaries', component: () => import('@/views/payroll/EmployeeSalariesView.vue'), meta: { roles: ['hr_manager', 'company_admin', 'super_admin'] } },
+      { path: 'payroll/employee-salaries', name: 'employee-salaries', component: () => import('@/views/payroll/EmployeeSalariesView.vue'), meta: { roles: ['hr_manager', 'company_admin', 'super_admin', 'payroll_officer'] } },
       { path: 'payroll/rules', name: 'payroll-rules', component: () => import('@/views/payroll/PayrollRulesView.vue'), meta: { roles: ['hr_manager', 'company_admin', 'super_admin'] } },
 
       // Self-service payslips
@@ -43,12 +43,12 @@ const routes = [
       { path: 'loans/:id', name: 'loan-detail', component: () => import('@/views/loans/LoanDetailView.vue') },
 
       // Reports
-      { path: 'reports', name: 'reports', component: () => import('@/views/reports/ReportsView.vue') },
-      { path: 'reports/tax', name: 'tax-report', component: () => import('@/views/reports/TaxReportView.vue') },
-      { path: 'reports/headcount', name: 'headcount-report', component: () => import('@/views/reports/HeadcountView.vue') },
+      { path: 'reports', name: 'reports', component: () => import('@/views/reports/ReportsView.vue'), meta: { roles: ['hr_manager', 'company_admin', 'super_admin', 'payroll_officer', 'finance_manager'] } },
+      { path: 'reports/tax', name: 'tax-report', component: () => import('@/views/reports/TaxReportView.vue'), meta: { roles: ['hr_manager', 'company_admin', 'super_admin', 'payroll_officer', 'finance_manager'] } },
+      { path: 'reports/headcount', name: 'headcount-report', component: () => import('@/views/reports/HeadcountView.vue'), meta: { roles: ['hr_manager', 'company_admin', 'super_admin', 'finance_manager'] } },
 
       // AI
-      { path: 'ai-advisor', name: 'ai-advisor', component: () => import('@/views/AIAdvisorView.vue') },
+      { path: 'ai-advisor', name: 'ai-advisor', component: () => import('@/views/AIAdvisorView.vue'), meta: { roles: ['hr_manager', 'company_admin', 'super_admin', 'payroll_officer', 'finance_manager', 'branch_manager'] } },
 
       // Settings and master data
       { path: 'settings', name: 'settings', component: () => import('@/views/settings/SettingsView.vue'), meta: { roles: ['company_admin', 'super_admin'] } },

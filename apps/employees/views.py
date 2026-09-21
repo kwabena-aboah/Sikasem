@@ -37,9 +37,20 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if not user.company_id:
             return Employee.objects.none()
+
         # Employees can only see themselves
-        if user.role == 'employee' and hasattr(user, 'employee_profile'):
-            return Employee.objects.filter(id=user.employee_profile.id)
+        if user.role == 'employee':
+            if hasattr(user, 'employee_profile'):
+                return Employee.objects.filter(id=user.employee_profile.id)
+            return Employee.objects.none()
+
+        # Branch managers see their branch employees
+        if user.role == 'branch_manager' and user.branch_id:
+            return Employee.objects.filter(
+                company_id=user.company_id,
+                branch_id=user.branch_id
+            ).select_related('department', 'branch', 'job_grade', 'reports_to', 'company')
+
         return Employee.objects.filter(
             company_id=user.company_id
         ).select_related('department', 'branch', 'job_grade', 'reports_to', 'company')
@@ -111,10 +122,14 @@ class EmployeeViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def headcount(self, request):
         from django.db.models import Count
+        from rest_framework.exceptions import PermissionDenied
         user = request.user
-        data = Employee.objects.filter(
-            company_id=user.company_id
-        ).values('department__name', 'status').annotate(count=Count('id'))
+        if user.role == 'employee':
+            raise PermissionDenied("Employees cannot access company headcount reports.")
+        emp_filter = Q(company_id=user.company_id)
+        if user.role == 'branch_manager' and user.branch_id:
+            emp_filter &= Q(branch_id=user.branch_id)
+        data = Employee.objects.filter(emp_filter).values('department__name', 'status').annotate(count=Count('id'))
         return Response(list(data))
 
     @action(detail=False, methods=['get'])

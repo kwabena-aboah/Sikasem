@@ -106,10 +106,12 @@ class LeaveApplicationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         # Employees see only their own applications
-        if user.role == 'employee' and hasattr(user, 'employee_profile'):
-            return LeaveApplication.objects.filter(
-                employee=user.employee_profile
-            ).select_related('leave_type', 'employee', 'approved_by').order_by('-applied_at')
+        if user.role == 'employee':
+            if hasattr(user, 'employee_profile'):
+                return LeaveApplication.objects.filter(
+                    employee=user.employee_profile
+                ).select_related('leave_type', 'employee', 'approved_by').order_by('-applied_at')
+            return LeaveApplication.objects.none()
 
         if not user.company_id:
             return LeaveApplication.objects.none()
@@ -117,6 +119,9 @@ class LeaveApplicationViewSet(viewsets.ModelViewSet):
         qs = LeaveApplication.objects.filter(
             employee__company_id=user.company_id
         ).select_related('leave_type', 'employee', 'employee__department', 'approved_by')
+
+        if user.role == 'branch_manager' and user.branch_id:
+            qs = qs.filter(employee__branch_id=user.branch_id)
 
         employee_filter = self.request.query_params.get('employee') or self.request.query_params.get('employee_id')
         if employee_filter:
@@ -166,6 +171,10 @@ class LeaveApplicationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
+        if request.user.role == 'employee':
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Employees cannot approve leave applications.")
+
         leave = self.get_object()
         if leave.status != 'pending':
             return Response({'error': 'Only pending leaves can be approved'}, status=400)
@@ -188,6 +197,10 @@ class LeaveApplicationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
+        if request.user.role == 'employee':
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Employees cannot reject leave applications.")
+
         leave = self.get_object()
         if leave.status != 'pending':
             return Response({'error': 'Only pending leaves can be rejected'}, status=400)

@@ -85,10 +85,12 @@ class LoanViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         # Employees see only their own loans
-        if user.role == 'employee' and hasattr(user, 'employee_profile'):
-            return Loan.objects.filter(
-                employee=user.employee_profile
-            ).select_related('employee', 'loan_type').order_by('-created_at')
+        if user.role == 'employee':
+            if hasattr(user, 'employee_profile'):
+                return Loan.objects.filter(
+                    employee=user.employee_profile
+                ).select_related('employee', 'loan_type').order_by('-created_at')
+            return Loan.objects.none()
 
         if not user.company_id:
             return Loan.objects.none()
@@ -96,6 +98,9 @@ class LoanViewSet(viewsets.ModelViewSet):
         qs = Loan.objects.filter(
             employee__company_id=user.company_id
         ).select_related('employee', 'loan_type').order_by('-created_at')
+
+        if user.role == 'branch_manager' and user.branch_id:
+            qs = qs.filter(employee__branch_id=user.branch_id)
 
         # Allow HR to filter by specific employee
         employee_filter = self.request.query_params.get('employee')
@@ -115,11 +120,7 @@ class LoanViewSet(viewsets.ModelViewSet):
         # Resolve employee: must come from the logged-in user's profile
         employee = getattr(user, 'employee_profile', None)
 
-        # HR/admins can submit on behalf of an employee (via employee field in payload)
-        # but employee FK is read_only so it always comes from request context
         if not employee:
-            # For HR staff creating loans for other employees, they should use a different flow
-            # For self-service portal: employee must be linked to account
             raise ValidationError(
                 'Your account is not linked to an employee profile. '
                 'Please contact HR to link your account.'
@@ -139,8 +140,14 @@ class LoanViewSet(viewsets.ModelViewSet):
         serializer = LoanSerializer(instance, context={'include_schedule': True})
         return Response(serializer.data)
 
+    def _require_management_role(self, request):
+        if request.user.role == 'employee':
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Employees cannot perform loan approval or disbursement actions.")
+
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
+        self._require_management_role(request)
         loan = self.get_object()
         if loan.status != 'pending':
             return Response({'error': 'Only pending loans can be approved'}, status=400)
@@ -152,6 +159,7 @@ class LoanViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
+        self._require_management_role(request)
         loan = self.get_object()
         if loan.status != 'pending':
             return Response({'error': 'Only pending loans can be rejected'}, status=400)
@@ -162,6 +170,7 @@ class LoanViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def disburse(self, request, pk=None):
+        self._require_management_role(request)
         loan = self.get_object()
         if loan.status != 'approved':
             return Response({'error': 'Only approved loans can be disbursed'}, status=400)

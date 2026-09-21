@@ -34,8 +34,8 @@
     <div class="sk-card">
       <div class="sk-card-header">
         <i class="bi bi-calendar3-week-fill" style="color:var(--sk-blue-mid)"></i>
-        <h5 class="sk-card-title">Monthly Summary</h5>
-        <div class="ms-auto d-flex gap-2">
+        <h5 class="sk-card-title">{{ auth.isEmployee ? 'My Attendance Record' : 'Monthly Summary' }}</h5>
+        <div class="ms-auto d-flex gap-2" v-if="!auth.isEmployee">
           <div class="sk-input-group" style="width:220px">
             <i class="bi bi-search input-icon"></i>
             <input type="text" class="sk-input" v-model="search" placeholder="Search employee..." />
@@ -46,7 +46,7 @@
         <table class="sk-table">
           <thead>
             <tr>
-              <th>Employee</th>
+              <th>{{ auth.isEmployee ? 'My Details' : 'Employee' }}</th>
               <th>Present</th>
               <th>Absent</th>
               <th>Late</th>

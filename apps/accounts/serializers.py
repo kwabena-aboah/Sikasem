@@ -12,6 +12,9 @@ class UserSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(source='company.name', read_only=True, default='')
     branch_name = serializers.CharField(source='branch.name', read_only=True, default='')
     employee_profile_id = serializers.SerializerMethodField()
+    job_title = serializers.SerializerMethodField()
+    department_name = serializers.SerializerMethodField()
+    employee_id_number = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -20,15 +23,36 @@ class UserSerializer(serializers.ModelSerializer):
             'role', 'company', 'company_name', 'branch', 'branch_name',
             'is_active', 'date_joined', 'profile_photo', 'phone',
             'must_change_password', 'two_factor_enabled',
-            'employee_profile_id',
+            'employee_profile_id', 'job_title', 'department_name', 'employee_id_number',
         ]
-        read_only_fields = ['id', 'date_joined', 'must_change_password', 'employee_profile_id']
+        read_only_fields = [
+            'id', 'date_joined', 'must_change_password', 'employee_profile_id',
+            'job_title', 'department_name', 'employee_id_number',
+        ]
 
     def get_employee_profile_id(self, obj):
         try:
             return str(obj.employee_profile.id)
         except Exception:
             return None
+
+    def get_job_title(self, obj):
+        try:
+            return obj.employee_profile.job_title or ''
+        except Exception:
+            return ''
+
+    def get_department_name(self, obj):
+        try:
+            return obj.employee_profile.department.name if obj.employee_profile.department else ''
+        except Exception:
+            return ''
+
+    def get_employee_id_number(self, obj):
+        try:
+            return obj.employee_profile.employee_id or ''
+        except Exception:
+            return ''
 
 
 class UserCreateSerializer(serializers.ModelSerializer):

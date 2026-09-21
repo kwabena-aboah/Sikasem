@@ -353,8 +353,13 @@ class PayslipViewSet(viewsets.ModelViewSet):
         qs = Payslip.objects.select_related('employee', 'payroll_period')
 
         # Employees can only see their own payslips
-        if user.role == 'employee' and hasattr(user, 'employee_profile'):
-            qs = qs.filter(employee=user.employee_profile)
+        if user.role == 'employee':
+            if hasattr(user, 'employee_profile'):
+                qs = qs.filter(employee=user.employee_profile)
+            else:
+                return Payslip.objects.none()
+        elif user.role == 'branch_manager' and user.branch_id:
+            qs = qs.filter(employee__branch_id=user.branch_id)
         else:
             qs = qs.filter(payroll_period__company=user.company)
 
@@ -363,7 +368,7 @@ class PayslipViewSet(viewsets.ModelViewSet):
         period_id = self.request.query_params.get('period_id')
         year = self.request.query_params.get('year')
 
-        if employee_id:
+        if employee_id and user.role != 'employee':
             qs = qs.filter(employee_id=employee_id)
         if period_id:
             qs = qs.filter(payroll_period_id=period_id)

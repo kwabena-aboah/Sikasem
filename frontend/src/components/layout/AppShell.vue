@@ -68,12 +68,14 @@
           <i class="bi bi-bar-chart-line-fill"></i> Reports & Analytics
         </router-link>
 
-        <div class="sidebar-section">Intelligence</div>
+        <template v-if="!auth.isEmployee">
+          <div class="sidebar-section">Intelligence</div>
 
-        <router-link to="/ai-advisor" class="sidebar-link" :class="{ active: $route.name === 'ai-advisor' }">
-          <i class="bi bi-stars"></i> AI Advisor
-          <span class="sidebar-badge" style="background:var(--sk-blue-light);color:white">AI</span>
-        </router-link>
+          <router-link to="/ai-advisor" class="sidebar-link" :class="{ active: $route.name === 'ai-advisor' }">
+            <i class="bi bi-stars"></i> AI Advisor
+            <span class="sidebar-badge" style="background:var(--sk-blue-light);color:white">AI</span>
+          </router-link>
+        </template>
 
         <template v-if="auth.isAdmin || auth.isHR">
           <div class="sidebar-section">Admin &amp; HR Setup</div>

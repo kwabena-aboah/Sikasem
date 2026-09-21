@@ -37,6 +37,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     serializer_class = AttendanceSerializer
     permission_classes = [permissions.IsAuthenticated]
     filterset_fields = ['employee', 'date', 'status']
+    ordering = ['-date']
 
     def get_queryset(self):
         user = self.request.user
@@ -47,20 +48,33 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             employee__company_id=user.company_id
         ).select_related('employee', 'shift')
 
+        # Role scoping
+        if user.role == 'employee':
+            if hasattr(user, 'employee_profile'):
+                qs = qs.filter(employee=user.employee_profile)
+            else:
+                return AttendanceRecord.objects.none()
+        elif user.role == 'branch_manager' and user.branch_id:
+            qs = qs.filter(employee__branch_id=user.branch_id)
+
         employee_id = self.request.query_params.get('employee_id')
         month       = self.request.query_params.get('month')
         year        = self.request.query_params.get('year')
 
-        if employee_id:
+        if employee_id and user.role != 'employee':
             qs = qs.filter(employee_id=employee_id)
         if month and year:
             qs = qs.filter(date__month=int(month), date__year=int(year))
 
-        return qs
+        return qs.order_by('-date')
 
     @action(detail=False, methods=['post'])
     def bulk_import(self, request):
         from apps.employees.models import Employee
+        from rest_framework.exceptions import PermissionDenied
+        if request.user.role not in ['super_admin', 'company_admin', 'hr_manager']:
+            raise PermissionDenied("Only HR and administrators can import attendance records.")
+
         records = request.data.get('records', [])
         created = 0
         errors  = []
@@ -101,16 +115,29 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     def monthly_summary(self, request):
         import datetime
         user  = request.user
+        if not user.company_id:
+            return Response([])
+
         month = int(request.query_params.get('month', datetime.date.today().month))
         year  = int(request.query_params.get('year',  datetime.date.today().year))
 
+        att_filter = Q(
+            employee__company_id=user.company_id,
+            date__month=month,
+            date__year=year,
+        )
+
+        if user.role == 'employee':
+            if hasattr(user, 'employee_profile'):
+                att_filter &= Q(employee=user.employee_profile)
+            else:
+                return Response([])
+        elif user.role == 'branch_manager' and user.branch_id:
+            att_filter &= Q(employee__branch_id=user.branch_id)
+
         data = (
             AttendanceRecord.objects
-            .filter(
-                employee__company_id=user.company_id,
-                date__month=month,
-                date__year=year,
-            )
+            .filter(att_filter)
             .values('employee__id', 'employee__first_name', 'employee__last_name')
             .annotate(
                 present=Count('id', filter=Q(status='present')),

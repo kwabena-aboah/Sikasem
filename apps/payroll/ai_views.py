@@ -42,6 +42,10 @@ class AIAdvisorViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def forecast(self, request):
         """Get payroll cost forecast"""
+        if request.user.role == 'employee':
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Employees cannot view company payroll forecasts.")
+
         months = int(request.query_params.get('months', 3))
         months = max(1, min(months, 12))  # clamp 1–12
 
